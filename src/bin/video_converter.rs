@@ -1,0 +1,77 @@
+use gstreamer as gst;
+use gstreamer_video as gst_video;
+use gst::prelude::*;
+
+fn main() {
+    gst_examples::run(example_main);
+}
+
+fn example_main() {
+    gst::init().unwrap();
+
+    // This creates a pipeline by parsing the gst-launch pipeline syntax.
+    let pipeline = gst::parse_launch(
+        "videotestsrc name=src ! video/x-raw,width=640,height=480 ! compositor0.sink_0 \
+         compositor ! video/x-raw,width=1280,height=720 ! videoconvert ! autovideosink",
+    )
+    .unwrap();
+
+    let pipeline = pipeline.dynamic_cast::<gst::Pipeline>().unwrap();
+    let compositor = pipeline.by_name("compositor0").unwrap();
+    let sinkpad = compositor.static_pad("sink_0").unwrap();
+
+    /* Completely contrived example that takes the 4:3 input video, cuts out a 5:4 frame
+     * and then adds pillarbox borders to place it in a 16:9 target area */
+    /* The output will be the full frame: */
+    sinkpad.set_property("xpos", 0i32);
+    sinkpad.set_property("ypos", 0i32);
+    sinkpad.set_property("width", 1280i32);
+    sinkpad.set_property("height", 720i32);
+
+    let mut converter_config = gst_video::VideoConverterConfig::new();
+    /* Crop the input frame to 5:4: */
+    converter_config.set_src_x((640 - 512) / 2);
+    converter_config.set_src_width(Some(512));
+    converter_config.set_src_y(0);
+    converter_config.set_src_height(Some(480));
+    /* Add postbox borders to output 900x720 */
+    converter_config.set_dest_x((1280 - 900) / 2);
+    converter_config.set_dest_width(Some(900));
+    converter_config.set_dest_y(0);
+    converter_config.set_dest_height(Some(720));
+
+    sinkpad.set_property("converter-config", &*converter_config);
+    pipeline
+        .set_state(gst::State::Playing)
+        .expect("Unable to set the pipeline to the `Playing` state");
+
+    /* Iterate messages on the bus until an error or EOS occurs,
+     * although in this example the only error we'll hopefully
+     * get is if the user closes the output window */
+    let bus = pipeline.bus().unwrap();
+    for msg in bus.iter_timed(gst::ClockTime::NONE) {
+        use gst::MessageView;
+
+        match msg.view() {
+            MessageView::Eos(..) => {
+                println!("received eos");
+                // An EndOfStream event was sent to the pipeline, so exit
+                break;
+            }
+            MessageView::Error(err) => {
+                println!(
+                    "Error from {:?}: {} ({:?})",
+                    err.src().map(|s| s.path_string()),
+                    err.error(),
+                    err.debug()
+                );
+                break;
+            }
+            _ => (),
+        };
+    }
+
+    pipeline
+        .set_state(gst::State::Null)
+        .expect("Unable to set the pipeline to the `Null` state");
+}

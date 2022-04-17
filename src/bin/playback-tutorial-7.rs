@@ -1,0 +1,58 @@
+use gstreamer as gst;
+use gst::prelude::*;
+
+use anyhow::Error;
+
+fn main() {
+    gst_examples::run(tutorial_main);
+}
+
+fn tutorial_main() -> Result<(), Error> {
+    // Initialize GStreamer
+    gst::init()?;
+
+    // Build the pipeline
+    let pipeline = gst::parse_launch(
+        "playbin uri=https://www.freedesktop.org/software/gstreamer-sdk/data/media/sintel_trailer-480p.webm")?;
+
+    // Create elements that go inside the sink bin
+    let equalizer = gst::ElementFactory::make("equalizer-3bands", Some("equalizer"))
+        .expect("Could not create equalizer element.");
+    let convert = gst::ElementFactory::make("audioconvert", Some("convert"))
+        .expect("Could not create audioconvert element.");
+    let sink = gst::ElementFactory::make("autoaudiosink", Some("audio_sink"))
+        .expect("Could not create autoaudiosink element.");
+
+    // Create the sink bin, add the elements and link them
+    let bin = gst::Bin::new(Some("audio_sink_bin"));
+    bin.add_many(&[&equalizer, &convert, &sink]).unwrap();
+    gst::Element::link_many(&[&equalizer, &convert, &sink]).expect("Failed to link elements.");
+
+    let pad = equalizer
+        .static_pad("sink")
+        .expect("Failed to get a static pad from equalizer.");
+    let ghost_pad = gst::GhostPad::with_target(Some("sink"), &pad).unwrap();
+    ghost_pad.set_active(true)?;
+    bin.add_pad(&ghost_pad)?;
+
+    // Configure the equalizer
+    equalizer.set_property("band1", -24.0);
+    equalizer.set_property("band2", -24.0);
+
+    pipeline.set_property("audio-sink", &bin);
+
+    // Set to PLAYING
+    pipeline.set_state(gst::State::Playing)?;
+
+    // Wait until an EOS or error message appears
+    let bus = pipeline.bus().unwrap();
+    let _msg = bus.timed_pop_filtered(
+        gst::ClockTime::NONE,
+        &[gst::MessageType::Error, gst::MessageType::Eos],
+    );
+
+    // Clean up
+    pipeline.set_state(gst::State::Null)?;
+
+    Ok(())
+}
